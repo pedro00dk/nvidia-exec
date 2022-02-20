@@ -16,17 +16,29 @@ starts (to initialize the device), and after the program finishes (to cleanup re
 `nvx start` may be called multiple times, its is only going to initialize the devices in the first call and clean
 resources when the last call ends.
 
-### Other actions
+## All actions
 
--   `nvx on` - Turn on the gpu and load the nvidia modules.
--   `nvx off` - Turn off the gpu and unload the nvidia modules. This command may hang if there are programs using it.
--   `nvx off-kill` - Kill processes using the gpu and turn it off (may still hang).
--   `nvx off-boot` - Only turn off the gpu since the nvidia modules are blacklisted.
--   `nvx status` - Print **on** or **off** to indicate the current gpu status.
--   `nvx processes` - Print all processes using the gpu. In case `nvx off` hangs, you can list the processes and stop
-    them manually, after that, the `nvx off` will complete
--   `nvx kill` - Kill all processes using the gpu. Some applications might still spawn another process immediately (e.g.
-    google chrome), preventing the gpu from turning off.
+-   automatic gpu management:
+
+    -   `start [command]` - Turn on the gpu, load modules if necessary, and run [command]. When [command] exits, the gpu
+        is turned off if there are no other 'nvx start' processes. During turn off, processes using the gpu not started
+        with 'nvx start' are killed.
+
+-   manual gpu management:
+
+    -   `on` - Turn on the gpu and load modules. If the gpu is already started, it tries to turn on again it and reload
+        all modules. Effectively, it does nothing.
+    -   `off` - Unload modules and turn off the gpu. If the gpu is already off, it tries to turn off again it and unload
+        all modules. Effectively, it does nothing. If there are processes using the gpu, the turn off process might hang
+        indefinitely. Use 'nvx ps' to check with processes are running to finish them. 'nvx kill' can be used as well,
+        but it might not be able to kill all processes.
+    -   `off-boot` - Same as 'off', but it does not unload modules.
+    -   `off-kill` - Same as 'off', but it also attempts to kill processes using the gpu.
+    -   `status` - Print the status of the gpu.
+    -   `ps` - Print the processes using the gpu.
+    -   `psx` - Print 'nvx start' processes.
+    -   `kill` - Attempts to kill all processes using the gpu. These are the same processes reported by 'nvx ps'.
+    -   `dev` - Print the pci display devices that contain nvidia cards. Only works if the gpu is on.
 
 ## Installation
 
@@ -76,11 +88,18 @@ Note that the following services do not run on boot are not likely to stop `nvx`
 -   `nvidia-resume.service`
 -   `nvidia-suspend.service`
 
-### Files
+### Files and Dependencies
 
 For other users that may want to create a package to their preferred systems, the following is where I place the files
 on Arch Linux.
 
--   **nvx** -> _/usr/bin/nvx_ - Script that handles the gpu and run programs
--   **nvx.service** -> _/usr/lib/systemd/system/nvx.service_ - Service that turns off gpu during boot
--   **modprobe.conf** -> /usr/lib/modprobe.d/nvx.conf - Blacklisted modules
+-   **nvx** -> _/usr/bin/nvx_ - Script that handles the gpu and run programs.
+-   **nvx.service** -> _/usr/lib/systemd/system/nvx.service_ - Service that turns off gpu during boot.
+-   **modprobe.conf** -> /usr/lib/modprobe.d/nvx.conf - Blacklisted modules.
+
+Required dependencies:
+
+-   **jq** - https://stedolan.github.io/jq/
+-   **lshw** - https://linux.die.net/man/1/lshw
+-   **lsof** - https://linux.die.net/man/8/lsof
+-   **Nvidia proprietary drivers**

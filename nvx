@@ -205,7 +205,7 @@ Usage: $0 [start|on|off|off-boot|off-kill|status|ps|psx|kill|dev]
         Unload modules and turn off the gpu.
         If the gpu is already off, it tries to turn off again it and unload all modules.
             Effectively, it does nothing.
-        If there are processes ugin the gpu, the turn off process might hang indefinitely.
+        If there are processes using the gpu, the turn off process might hang indefinitely.
             Use 'nvx ps' to check with processes are running to finish them.
             'nvx kill' can be used as well, but it might not be able to kill all processes.
 
