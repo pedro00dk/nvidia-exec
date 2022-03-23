@@ -1,17 +1,18 @@
 # NVidia eXec - `nvx`
 
-`nvx` is a script to run programs on Pascal and older (<= 10 series) nvidia optimus setups with power management. `nvx`
-tries to be extremely simple to install and use, and supports both Xorg and Wayland environments.
+`nvx` is a script to run programs on nvidia optimus setups with power management. `nvx` tries to be extremely simple to
+install and use, and supports both Xorg and Wayland environments.
 
 Note: This script is highly experimental and require very recent versions of nvidia drivers and gnome patches to work.
 
 ## Usage
 
-The script requires `sudo` to toggle the GPU and modules. You might be asked to input your password before the program
-starts (to initialize the device), and after the program finishes (to cleanup resources).
-
 1. run `nvx start [program]`
 2. that is it
+
+The script will require user password to toggle the GPU and modules, **but it must not be started with `sudo`**. You
+might be asked to input your password before the program starts (to initialize the device), and after the program
+finishes (to cleanup resources).
 
 `nvx start` may be called multiple times, its is only going to initialize the devices in the first call and clean
 resources when the last call ends.
