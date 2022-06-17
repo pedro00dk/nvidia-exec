@@ -112,10 +112,10 @@ function unload_modules {
 # Load all nvidia modules.
 function load_modules {
     echo "# load modules"
-    MODULES_LOAD=(nvidia nvidia_uvm nvidia_modeset "nvidia_drm modeset=1")
+    MODULES_LOAD=(nvidia nvidia_uvm nvidia_modeset nvidia_drm)
     for module in "${MODULES_LOAD[@]}"; do
         echo "   -- module $module"
-        eval "sudo modprobe ${module}"
+        sudo modprobe ${module}
     done
 }
 
