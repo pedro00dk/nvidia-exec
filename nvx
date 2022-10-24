@@ -153,6 +153,18 @@ function stop {
     flock -u 3
 }
 
+### signal handling functions ###
+
+function ctrl_c_interrupt {
+	echo "# Ctrl-C detected, stopping..."
+	stop
+}
+
+# install signal handlers
+trap ctrl_c_interrupt INT
+
+### main code ###
+
 case "$1" in
 
 dev) devices | jq ;;
