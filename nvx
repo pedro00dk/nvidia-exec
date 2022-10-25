@@ -92,13 +92,18 @@ function turn_on {
     unset $IFS
 }
 
-# Unload all nvidia modules, some modules may fail to unload.
+# Unload all nvidia modules
+# if module failed to unload, abort
 function unload_modules {
     echo "# unload modules"
     MODULES_UNLOAD=(nvidia_drm nvidia_modeset nvidia_uvm nvidia)
     for module in "${MODULES_UNLOAD[@]}"; do
         echo "-- module $module"
-        sudo modprobe --remove $module 2>/dev/null
+        sudo modprobe --remove $module
+        if [ $? -ne 0 ]; then
+            echo "     failed to unload, gpu still in use, bail out."
+            exit 1
+        fi
     done
 }
 
