@@ -1,5 +1,9 @@
 #!/bin/bash
 
+### config ###
+COUNTER_FILE="/tmp/nvx_processes"
+LOG_FILE="/tmp/nvx_log"
+
 ### query functions ###
 
 # Print json strings contaning pci bus data and their nvidia display devices.
@@ -46,12 +50,12 @@ function ps_nvidia_kill {
         echo "-- kill process $NAME -> $PID"
         kill $PID
     done
-    unset $IFS
+    unset IFS
 }
 
 # Remove gpu devices from the bus and change their pci power state to "auto".
 # The process may hand if not all processes using the gpu are stopped.
-function turn_off {
+function turn_off {    
     echo "# turn off"
     IFS=$'\n'
     for pci in $(devices); do
@@ -67,11 +71,13 @@ function turn_off {
         echo "   -- power control auto"
         sudo tee /sys/bus/pci/devices/$PCI_BUS/power/control <<<auto >/dev/null
     done
-    unset $IFS
+    unset IFS
+    
+    log_entry "[GPU] off"
 }
 
 # Rescan pci devices enabling gpu devices and changing their pci power state to "on".
-function turn_on {
+function turn_on {    
     echo "# turn on gpu"
     echo "-- pci rescan"
     sudo tee /sys/bus/pci/rescan <<<1 >/dev/null
@@ -89,7 +95,9 @@ function turn_on {
             sudo tee /sys/bus/pci/devices/$DEVICE_BUS/power/control <<<on >/dev/null
         done
     done
-    unset $IFS
+    unset IFS
+    
+    log_entry "[GPU] on"
 }
 
 # Unload all nvidia modules
@@ -113,13 +121,16 @@ function load_modules {
     MODULES_LOAD=(nvidia nvidia_uvm nvidia_modeset nvidia_drm)
     for module in "${MODULES_LOAD[@]}"; do
         echo "   -- module $module"
-        sudo modprobe ${module}
+        if [[ "$module" == nvidia_drm ]]; then
+            #echo "      with modesetting"
+            sudo modprobe ${module} #modeset=1
+        else
+            sudo modprobe ${module}
+        fi
     done
 }
 
 ### persistent counter functions ###
-
-COUNTER_FILE="/tmp/nvidia_processes"
 
 function counter_check_and_create {
     # create counter if it doesn't exist
@@ -159,6 +170,28 @@ function counter_print {
     echo "running processes: $?"
 }
 
+### logging functions ###
+
+function log_date {
+    echo -n $(date "+%H:%M:%S") >> ${LOG_FILE}
+    echo -n " " >> ${LOG_FILE}
+}
+
+function log_entry {
+    log_date
+    echo $1 >> ${LOG_FILE}
+}
+
+function log_start {    
+    counter_get_value
+    log_entry "[APP] start no $?: $1"
+}
+
+function log_stop {    
+    counter_get_value
+    log_entry "[APP] stop no $?: $1"
+}
+
 ### execution functions ###
 
 # Check if there are any other nvx start instances running and start the gpu if not.
@@ -168,8 +201,10 @@ function start {
     counter_get_value
     val=$?
 
-    if [ "$val" -eq 0 ]; then
-        # no processes running
+    if [[ $val == 0 && $(status) == "off" ]]; then
+        # no processes running 
+        log_entry "[GPU] attempt start"
+               
         turn_on
         load_modules
     fi
@@ -187,6 +222,8 @@ function stop {
 
     if [ "$val" -eq 0 ]; then
         # no process running
+        log_entry "[GPU] attempt stop"
+        
         ps_nvidia_kill
         unload_modules
         turn_off
@@ -196,8 +233,9 @@ function stop {
 ### signal handling functions ###
 
 function ctrl_c_interrupt {
-	echo "# Ctrl-C detected, stopping..."
-	stop
+    log_entry "[APP] Ctrl-C detected, wait for app to close"
+    
+	echo "# Ctrl-C detected, wait for app to close..."
 }
 
 # install signal handlers
@@ -233,8 +271,10 @@ on)
 start)
     shift
     start
-    sudo --reset-timestamp
-    __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia "$@" || true
+    log_start "$@"
+    __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia "$@"
+    log_stop "$@"
+    sleep 1
     stop
     ;;
 *)
