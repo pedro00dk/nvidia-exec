@@ -122,8 +122,8 @@ function load_modules {
     for module in "${MODULES_LOAD[@]}"; do
         echo "   -- module $module"
         if [[ "$module" == nvidia_drm ]]; then
-            #echo "      with modesetting"
-            sudo modprobe ${module} #modeset=1
+            echo "      with modesetting"
+            sudo modprobe ${module} modeset=1
         else
             sudo modprobe ${module}
         fi
