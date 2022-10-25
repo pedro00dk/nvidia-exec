@@ -29,9 +29,57 @@ function status {
     [ -n "$(devices)" ] && echo "on" || echo "off"
 }
 
+function ps_dri {
+    IFS=$'\n'
+    for pci in $(devices); do
+        PCI_NAME=$(echo $pci | jq '.description + " - " + .product')
+        PCI_BUS=$(echo $pci | jq --raw-output '.businfo[4:]')
+        for device in $(echo $pci | jq -c '.children | .[]'); do
+            DEVICE_NAME=$(echo $device | jq '.description + " - " + .product')
+            DEVICE_BUS=$(echo $device | jq --raw-output '.businfo[4:]')
+            lsof "/dev/dri/by-path/pci-$DEVICE_BUS-card" 2>/dev/null | awk '{ if (NR>1) pids[$2" "$1]++ } END { for (pid in pids) { print pid } }'
+        done
+    done
+    unset IFS
+}
+
+function ps_nvidia_smi {
+    
+    PID=0
+    k=0
+    for i in $(nvidia-smi -q -d PIDS | grep "Process ID" -A2 | awk '{print $3==":" ? $4 : $3}'); do
+        # format
+        # PID (k=0)
+        # usage identifier (ignored)
+        # Process name (k=2)
+        
+        if [[ $k == 0 ]]; then PID=$i; fi
+        if [[ $k == 2 ]]; then
+            echo $PID $i
+        fi
+        
+        k=$((k+1))
+        k=$((k%3))
+    done
+}
+
 # Print which processes are accessing nvidia device files.
-function ps_nvidia {
+# print processes in format:
+# [PID] [name]
+function ps_nvidia_internal {
+    
+    # processes using /dev/nvidia
     lsof /dev/nvidia* 2>/dev/null | awk '{ if (NR>1) pids[$2" "$1]++ } END { for (pid in pids) { print pid } }'
+    
+    # processes using /dev/dri files
+    ps_dri
+    
+    # processes listed by nvidia-smi
+    ps_nvidia_smi
+}
+
+function ps_nvidia {
+    ps_nvidia_internal | sort | uniq
 }
 
 ### setup functions ###
@@ -49,6 +97,11 @@ function ps_nvidia_kill {
         PID=$(cut -d' ' -f1 <<<"$process")
         echo "-- kill process $NAME -> $PID"
         kill $PID
+        if [[ $? != 0 ]]; then
+            echo "    failed to kill process, bailing out."
+            log_entry "failed to kill process $NAME with PID $PID, bailing out."
+            exit 1
+        fi
     done
     unset IFS
 }
@@ -109,7 +162,8 @@ function unload_modules {
         echo "-- module $module"
         sudo modprobe --remove $module
         if [ $? -ne 0 ]; then
-            echo "     failed to unload, gpu still in use, bail out."
+            echo "     failed to unload, gpu still in use, bailing out."
+            log_entry "failed to unload module $module, bailing out."
             exit 1
         fi
     done
@@ -122,7 +176,7 @@ function load_modules {
     for module in "${MODULES_LOAD[@]}"; do
         echo "   -- module $module"
         if [[ "$module" == nvidia_drm ]]; then
-            echo "      with modesetting"
+            echo "       with modesetting"
             sudo modprobe ${module} modeset=1
         else
             sudo modprobe ${module}
@@ -248,24 +302,23 @@ case "$1" in
 dev) devices | jq ;;
 status) status ;;
 ps) ps_nvidia ;;
-process) counter_print ;;
+processes) counter_print ;;
 #
 kill) ps_nvidia_kill ;;
 off)
+    ps_nvidia_kill
     unload_modules
     turn_off
     ;;
 off-boot)
     turn_off
     ;;
-off-kill)
-    ps_nvidia_kill
-    unload_modules
-    turn_off
-    ;;
 on)
     turn_on
     load_modules
+    ;;
+tt)
+    tt
     ;;
 #
 start)
@@ -276,6 +329,9 @@ start)
     log_stop "$@"
     sleep 1
     stop
+    ;;
+log)
+    tail ${LOG_FILE}
     ;;
 *)
     echo "\
@@ -297,15 +353,13 @@ Usage: $0 [start|on|off|off-boot|off-kill|status|ps|psx|kill|dev]
         Unload modules and turn off the gpu.
         If the gpu is already off, it tries to turn off again it and unload all modules.
             Effectively, it does nothing.
-        If there are processes using the gpu, the turn off process might hang indefinitely.
-            Use 'nvx ps' to check with processes are running to finish them.
-            'nvx kill' can be used as well, but it might not be able to kill all processes.
+        If there are processes using the gpu, the turn off process will try to kill them.
+        Manual check is possible with 'nvx ps' to list all processes using the gpu.
+            'nvx kill' can be used to attempt to kill those processes, but it might not be able to kill all of them
+                (insufficient permissions for ex.)
 
     off-boot
         Same as 'off', but it does not unload modules.
-
-    off-kill
-        Same as 'off', but it also attempts to kill processes using the gpu.
 
     status
         Print the status of the gpu.
@@ -313,7 +367,7 @@ Usage: $0 [start|on|off|off-boot|off-kill|status|ps|psx|kill|dev]
     ps
         Print the processes using the gpu.
 
-    process
+    processes
         Print how many processes are using the gpu.
 
     kill
@@ -323,6 +377,17 @@ Usage: $0 [start|on|off|off-boot|off-kill|status|ps|psx|kill|dev]
     dev
         Print the pci display devices that contain nvidia cards.
         Only works if the gpu is on.
+        
+    log
+        Print last 10 lines of log file
     "
     ;;
 esac
+
+# if parent process is not a shell
+# wait for user input
+parent=$(ps -e | grep $PPID | awk '{print $4}')
+if [[ $parent != *sh ]]; then
+    echo -ne "\npress any key..."
+    read
+fi
