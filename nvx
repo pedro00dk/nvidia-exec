@@ -295,6 +295,12 @@ function ctrl_c_interrupt {
 # install signal handlers
 trap ctrl_c_interrupt INT
 
+# create log file
+if [[ ! -f ${LOG_FILE} ]]; then
+	touch ${LOG_FILE}
+	chmod 666 ${LOG_FILE}
+fi
+
 ### main code ###
 
 case "$1" in
@@ -384,10 +390,11 @@ Usage: $0 [start|on|off|off-boot|off-kill|status|ps|psx|kill|dev]
     ;;
 esac
 
-# if parent process is not a shell
+# if parent process is not a shell or sudo or systemd
 # wait for user input
-parent=$(ps -e | grep $PPID | awk '{print $4}')
-if [[ $parent != *sh ]]; then
+parent=$(ps --pid $PPID -o comm=)
+# echo "PPID $PPID parent is \"$parent\""
+if [[ $parent != *sh && $parent != sudo && $parent != systemd ]]; then
     echo -ne "\npress any key..."
     read
 fi
