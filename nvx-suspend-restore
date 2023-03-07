@@ -1,7 +1,7 @@
 #!/bin/bash -e
 #
 # Just put this file in /usr/lib/systemd/system-sleep
-# with executable persmissions
+# with executable permissions
 
 NAME=$(basename "$0")
 STATUS_DIR="/var/run/nvx/"
