@@ -7,7 +7,6 @@ function devices {
     lshw \
         -disable cpuid -disable cpuinfo -disable device-tree -disable dmi -disable ide -disable isapnp \
         -disable memory -disable network -disable pcmcia -disable scsi -disable spd -disable usb \
-        -class bridge -class display \
         -json \
         2>/dev/null |
         jq -c '
