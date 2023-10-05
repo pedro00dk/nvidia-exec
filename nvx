@@ -1,5 +1,9 @@
 #!/bin/bash
 
+### config ###
+COUNTER_FILE="/tmp/nvx_processes"
+LOG_FILE="/tmp/nvx_log"
+
 ### query functions ###
 
 # Print json strings contaning pci bus data and their nvidia display devices.
@@ -24,16 +28,57 @@ function status {
     [ -n "$(devices)" ] && echo "on" || echo "off"
 }
 
-# Print which processes are accessing nvidia device files.
-function ps_nvidia {
-    lsof /dev/nvidia* 2>/dev/null | awk '{ if (NR>1) pids[$2" "$1]++ } END { for (pid in pids) { print pid } }'
+function ps_dri {
+    IFS=$'\n'
+    for pci in $(devices); do
+        PCI_NAME=$(echo $pci | jq '.description + " - " + .product')
+        PCI_BUS=$(echo $pci | jq --raw-output '.businfo[4:]')
+        for device in $(echo $pci | jq -c '.children | .[]'); do
+            DEVICE_NAME=$(echo $device | jq '.description + " - " + .product')
+            DEVICE_BUS=$(echo $device | jq --raw-output '.businfo[4:]')
+            lsof "/dev/dri/by-path/pci-$DEVICE_BUS-card" 2>/dev/null | awk '{ if (NR>1) pids[$2" "$1]++ } END { for (pid in pids) { print pid } }'
+        done
+    done
+    unset IFS
 }
 
-# Print which processes are a nvx start instance.
-function ps_nvx {
-    PS="$(ps aux)"
-    # sleep 1
-    echo "$PS" | awk '/nvx start/ { cmd=""; for (i = 5 ; i <= NF ; i++) cmd = cmd " " $i; print $0 }'
+function ps_nvidia_smi {
+    
+    PID=0
+    k=0
+    for i in $(nvidia-smi -q -d PIDS | grep "Process ID" -A2 | awk '{print $3==":" ? $4 : $3}'); do
+        # format
+        # PID (k=0)
+        # usage identifier (ignored)
+        # Process name (k=2)
+        
+        if [[ $k == 0 ]]; then PID=$i; fi
+        if [[ $k == 2 ]]; then
+            echo $PID $i
+        fi
+        
+        k=$((k+1))
+        k=$((k%3))
+    done
+}
+
+# Print which processes are accessing nvidia device files.
+# print processes in format:
+# [PID] [name]
+function ps_nvidia_internal {
+    
+    # processes using /dev/nvidia
+    lsof /dev/nvidia* 2>/dev/null | awk '{ if (NR>1) pids[$2" "$1]++ } END { for (pid in pids) { print pid } }'
+    
+    # processes using /dev/dri files
+    ps_dri
+    
+    # processes listed by nvidia-smi
+    ps_nvidia_smi
+}
+
+function ps_nvidia {
+    ps_nvidia_internal | sort | uniq
 }
 
 ### setup functions ###
@@ -51,13 +96,18 @@ function ps_nvidia_kill {
         PID=$(cut -d' ' -f1 <<<"$process")
         echo "-- kill process $NAME -> $PID"
         kill $PID
+        if [[ $? != 0 ]]; then
+            echo "    failed to kill process, bailing out."
+            log_entry "failed to kill process $NAME with PID $PID, bailing out."
+            exit 1
+        fi
     done
-    unset $IFS
+    unset IFS
 }
 
 # Remove gpu devices from the bus and change their pci power state to "auto".
 # The process may hand if not all processes using the gpu are stopped.
-function turn_off {
+function turn_off {    
     echo "# turn off"
     IFS=$'\n'
     for pci in $(devices); do
@@ -73,11 +123,13 @@ function turn_off {
         echo "   -- power control auto"
         sudo tee /sys/bus/pci/devices/$PCI_BUS/power/control <<<auto >/dev/null
     done
-    unset $IFS
+    unset IFS
+    
+    log_entry "[GPU] off"
 }
 
 # Rescan pci devices enabling gpu devices and changing their pci power state to "on".
-function turn_on {
+function turn_on {    
     echo "# turn on gpu"
     echo "-- pci rescan"
     sudo tee /sys/bus/pci/rescan <<<1 >/dev/null
@@ -95,16 +147,24 @@ function turn_on {
             sudo tee /sys/bus/pci/devices/$DEVICE_BUS/power/control <<<on >/dev/null
         done
     done
-    unset $IFS
+    unset IFS
+    
+    log_entry "[GPU] on"
 }
 
-# Unload all nvidia modules, some modules may fail to unload.
+# Unload all nvidia modules
+# if module failed to unload, abort
 function unload_modules {
     echo "# unload modules"
     MODULES_UNLOAD=(nvidia_drm nvidia_modeset nvidia_uvm nvidia)
     for module in "${MODULES_UNLOAD[@]}"; do
         echo "-- module $module"
-        sudo modprobe --remove $module 2>/dev/null
+        sudo modprobe --remove $module
+        if [ $? -ne 0 ]; then
+            echo "     failed to unload, gpu still in use, bailing out."
+            log_entry "failed to unload module $module, bailing out."
+            exit 1
+        fi
     done
 }
 
@@ -114,75 +174,169 @@ function load_modules {
     MODULES_LOAD=(nvidia nvidia_uvm nvidia_modeset nvidia_drm)
     for module in "${MODULES_LOAD[@]}"; do
         echo "   -- module $module"
-        sudo modprobe ${module}
+        if [[ "$module" == nvidia_drm ]]; then
+            echo "       with modesetting"
+            sudo modprobe ${module} modeset=1
+        else
+            sudo modprobe ${module}
+        fi
     done
+}
+
+### persistent counter functions ###
+
+function counter_check_and_create {
+    # create counter if it doesn't exist
+    if [ ! -f ${COUNTER_FILE} ]; then
+        # no file
+        echo 0 > ${COUNTER_FILE}
+    fi
+}
+
+function counter_get_value {
+    counter_check_and_create
+
+    c=$(cat ${COUNTER_FILE})
+
+    # returns as exit code in $?
+    return $c
+}
+
+function counter_incr {
+    counter_get_value
+    c=$?
+
+    c=$(($c+1))
+    echo $c > ${COUNTER_FILE}
+}
+
+function counter_decr {
+    counter_get_value
+    c=$?
+
+    c=$(($c-1))
+    echo $c > ${COUNTER_FILE}
+}
+
+function counter_print {
+    counter_get_value
+    echo "running processes: $?"
+}
+
+### logging functions ###
+
+function log_date {
+    echo -n $(date "+%H:%M:%S") >> ${LOG_FILE}
+    echo -n " " >> ${LOG_FILE}
+}
+
+function log_entry {
+    log_date
+    echo $1 >> ${LOG_FILE}
+}
+
+function log_start {    
+    counter_get_value
+    log_entry "[APP] start no $?: $1"
+}
+
+function log_stop {    
+    counter_get_value
+    log_entry "[APP] stop no $?: $1"
 }
 
 ### execution functions ###
 
-LOCK=/tmp/nvx.lock
-
 # Check if there are any other nvx start instances running and start the gpu if not.
 function start {
-    exec 3>"$LOCK"
-    flock -x 3
-    # TODO investigate
-    # when ps_nvx is piped to wc -l directly, it counts one extra line because a subprocess is spawn.
-    # I do not know where that process come from. I found out that does not happen if I write it to a file.
-    ps_nvx >"$LOCK"
-    PS=$(cat "$LOCK" | wc -l)
-    if [ "$PS" -le 1 ]; then
+
+    # before program actually starts
+    counter_get_value
+    val=$?
+
+    if [[ $val == 0 && $(status) == "off" ]]; then
+        # no processes running 
+        log_entry "[GPU] attempt start"
+               
         turn_on
         load_modules
     fi
-    flock -u 3
+
+    counter_incr
 }
 
 # Check if there are any other nvx start instances running and stop the gpu if not.
 function stop {
-    exec 3>"$LOCK"
-    flock -x 3
-    ps_nvx >"$LOCK"
-    PS=$(cat "$LOCK" | wc -l)
-    if [ "$PS" -le 1 ]; then
+
+    # after program actually ends
+    counter_decr
+    counter_get_value
+    val=$?
+
+    if [ "$val" -eq 0 ]; then
+        # no process running
+        log_entry "[GPU] attempt stop"
+        
         ps_nvidia_kill
         unload_modules
         turn_off
     fi
-    flock -u 3
 }
+
+### signal handling functions ###
+
+function ctrl_c_interrupt {
+    log_entry "[APP] Ctrl-C detected, wait for app to close"
+    
+	echo "# Ctrl-C detected, wait for app to close..."
+}
+
+# install signal handlers
+trap ctrl_c_interrupt INT
+
+# create log file
+if [[ ! -f ${LOG_FILE} ]]; then
+	touch ${LOG_FILE}
+	chmod 666 ${LOG_FILE}
+fi
+
+### main code ###
 
 case "$1" in
 
 dev) devices | jq ;;
 status) status ;;
 ps) ps_nvidia ;;
-psx) ps_nvx ;;
+processes) counter_print ;;
 #
 kill) ps_nvidia_kill ;;
 off)
+    ps_nvidia_kill
     unload_modules
     turn_off
     ;;
 off-boot)
     turn_off
     ;;
-off-kill)
-    ps_nvidia_kill
-    unload_modules
-    turn_off
-    ;;
 on)
     turn_on
     load_modules
+    ;;
+tt)
+    tt
     ;;
 #
 start)
     shift
     start
-    sudo --reset-timestamp
-    __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia "$@" || true
+    log_start "$@"
+    __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia "$@"
+    log_stop "$@"
+    sleep 1
     stop
+    ;;
+log)
+    tail ${LOG_FILE}
     ;;
 *)
     echo "\
@@ -204,15 +358,13 @@ Usage: $0 [start|on|off|off-boot|off-kill|status|ps|psx|kill|dev]
         Unload modules and turn off the gpu.
         If the gpu is already off, it tries to turn off again it and unload all modules.
             Effectively, it does nothing.
-        If there are processes using the gpu, the turn off process might hang indefinitely.
-            Use 'nvx ps' to check with processes are running to finish them.
-            'nvx kill' can be used as well, but it might not be able to kill all processes.
+        If there are processes using the gpu, the turn off process will try to kill them.
+        Manual check is possible with 'nvx ps' to list all processes using the gpu.
+            'nvx kill' can be used to attempt to kill those processes, but it might not be able to kill all of them
+                (insufficient permissions for ex.)
 
     off-boot
         Same as 'off', but it does not unload modules.
-
-    off-kill
-        Same as 'off', but it also attempts to kill processes using the gpu.
 
     status
         Print the status of the gpu.
@@ -220,8 +372,8 @@ Usage: $0 [start|on|off|off-boot|off-kill|status|ps|psx|kill|dev]
     ps
         Print the processes using the gpu.
 
-    psx
-        Print 'nvx start' processes.
+    processes
+        Print how many processes are using the gpu.
 
     kill
         Attempts to kill all processes using the gpu.
@@ -230,6 +382,18 @@ Usage: $0 [start|on|off|off-boot|off-kill|status|ps|psx|kill|dev]
     dev
         Print the pci display devices that contain nvidia cards.
         Only works if the gpu is on.
+        
+    log
+        Print last 10 lines of log file
     "
     ;;
 esac
+
+# if parent process is not a shell or sudo or systemd
+# wait for user input
+parent=$(ps --pid $PPID -o comm=)
+# echo "PPID $PPID parent is \"$parent\""
+if [[ $parent != *sh && $parent != sudo && $parent != systemd ]]; then
+    echo -ne "\npress any key..."
+    read
+fi
