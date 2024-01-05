@@ -14,7 +14,7 @@ function devices {
             objects |
             select(.id | strings | contains("pci")) |
             select(.children) |
-            .children |= (map(select(.class=="display")) | map(select(.vendor | contains("NVIDIA")))) |
+            .children |= map(select(.vendor | contains("NVIDIA"))) |
             select(.children | length > 0)
         '
 }
