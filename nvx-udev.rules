@@ -1,0 +1,5 @@
+# NOT IN USE (YET)
+KERNEL=="nvidia", MODE="0660", OWNER="root", GROUP="root"
+KERNEL=="nvidia_uvm", MODE="0660", OWNER="root", GROUP="root"
+KERNEL=="nvidia_modeset", MODE="0660", OWNER="root", GROUP="root"
+KERNEL=="nvidia_uvm_tools", MODE="0660", OWNER="root", GROUP="root"
