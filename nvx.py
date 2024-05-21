@@ -10,20 +10,20 @@ import subprocess
 import sys
 
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 LOGGER_PATH = "/var/log/nvx.log"
 CONFIG_PATH = "/etc/nvx.conf"
 UNIX_SOCKET = "/tmp/nvx.sock"
 
-
 log = logging.getLogger()
 log.setLevel(logging.INFO)
-# stream_handler = logging.StreamHandler(sys.stdout)
-# stream_handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
-# log.addHandler(stream_handler)
-file_handler = logging.FileHandler(LOGGER_PATH)
-file_handler.setFormatter(logging.Formatter("%(asctime)s: %(levelname)s %(message)s"))
-log.addHandler(file_handler)
+if len(sys.argv) == 2 and sys.argv[1] == "daemon":
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    log.addHandler(stream_handler)
+    file_handler = logging.FileHandler(LOGGER_PATH)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s: %(levelname)s %(message)s"))
+    log.addHandler(file_handler)
 
 
 class Config:
@@ -261,7 +261,9 @@ if __name__ == "__main__":
             env["__NV_PRIME_RENDER_OFFLOAD"] = "1"
             env["__VK_LAYER_NV_optimus"] = "NVIDIA_only"
             env["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
-            process = subprocess.Popen(command, shell=True, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, env=env)
+            process = subprocess.Popen(
+                command, shell=True, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, env=env
+            )
             returncode = process.wait()
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
