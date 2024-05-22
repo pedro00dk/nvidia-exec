@@ -1,282 +1,304 @@
 #!/usr/bin/python
 
-from typing import Any, NamedTuple
+from typing import Any
 import json
 import logging
 import logging.handlers
 import os
+import re
 import socket
 import subprocess
 import sys
 
 
-VERSION = "0.2.1"
+VERSION = "0.2.3"
 LOGGER_PATH = "/var/log/nvx.log"
 CONFIG_PATH = "/etc/nvx.conf"
 UNIX_SOCKET = "/tmp/nvx.sock"
 
+
 log = logging.getLogger()
-log.setLevel(logging.INFO)
-if len(sys.argv) == 2 and sys.argv[1] == "daemon":
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
-    log.addHandler(stream_handler)
-    file_handler = logging.FileHandler(LOGGER_PATH)
-    file_handler.setFormatter(logging.Formatter("%(asctime)s: %(levelname)s %(message)s"))
-    log.addHandler(file_handler)
+
+
+def read(path: str):
+    """
+    Shorthand for reading a file and returning its lines as a list of strings.
+    """
+    try:
+        with open(path, "r") as file:
+            return file.read()
+    except:
+        log.warning(f"could not read file {path}")
+        return ""
+
+
+def write(path: str, content: str):
+    """
+    Shorthand for writing a string to a file.
+    """
+    with open(path, "w") as file:
+        file.write(content)
 
 
 class Config:
-    KERNEL_MODULES_BASE = ["nouveau", "nvidia", "nvidia_drm", "nvidia_uvm", "nvidia_modeset"]
-    DEVICE_CLASSES_BASE = ["display"]
-    DEVICE_VENDORS_BASE = ["nvidia"]
-    kernel_modules: list[str]
-    device_classes: list[str]
-    device_vendors: list[str]
+    """
+    NVX configuration sourced from CONFIG_PATH.
+    """
 
-    def __init__(self):
-        log.info(f"init config")
-        try:
-            with open(CONFIG_PATH, "r") as config_file:
-                lines = config_file.readlines()
-        except Exception as e:
-            log.warning(f"could not open config {CONFIG_PATH} - {e}")
-            lines: list[str] = []
-        lines = [line.strip().lower() for line in lines]
-        lines = [line for line in lines if len(line) > 0 and not line.startswith("#")]
-        config = {line.split("=")[0]: line.split("=")[1].split(",") for line in lines}
-        self.kernel_modules = [*self.KERNEL_MODULES_BASE, *config.get("KERNEL_MODULES", [])]
-        self.device_classes = [*self.DEVICE_CLASSES_BASE, *config.get("DEVICE_CLASSES", [])]
-        self.device_vendors = [*self.DEVICE_VENDORS_BASE, *config.get("DEVICE_VENDORS", [])]
-        log.info(f"kernel modules: {self.kernel_modules}")
-        log.info(f"device classes: {self.device_classes}")
-        log.info(f"device vendors: {self.device_vendors}")
+    def __init__(self, path: str):
+        log.info(f"Config init - path: {path}")
+        lines = [line.strip() for line in read(path).splitlines() if len(line) > 0 and not re.match(r"^\s*#|^$", line)]
+        config: dict[str, str] = {line.split("=")[0]: line.split("=")[1].strip() for line in lines}
+        self.kernel_modules = [v.strip() for v in config.get("kernel_modules", "").split(",")]
+        self.device_classes = [v.strip() for v in config.get("device_classes", "").split(",")]
+        self.device_vendors = [v.strip() for v in config.get("device_vendors", "").split(",")]
+        self.egl_vendor_path = config.get("egl_vendor_path", "").strip()
+        self.kill_on_off = config.get("kill_on_off", "") == "true"
 
-    def load_modules_sequence(self) -> list[str]:
+    def __repr__(self):
+        return f'{Config.__name__}({', '.join(f"{k}: {v}" for k, v in self.__dict__.items())})'
+
+    def load_kernel_modules_sequence(self):
         return [module for module in self.kernel_modules if module != "nouveau"]
 
-    def unload_modules_sequence(self) -> list[str]:
-        return self.kernel_modules[::-1]
+    def unload_kernel_modules_sequence(self):
+        return [module.split()[0] for module in self.kernel_modules[::-1]]
 
-    def match_device(self, device: dict[str, Any]) -> bool:
+    def match_device(self, device: dict[str, Any]):
         class_: str = device.get("class", "").lower()
         vendor: str = device.get("vendor", "").lower()
         return class_ in self.device_classes and any(v in vendor for v in self.device_vendors)
 
+    def apply_egl_override(self):
+        if self.egl_vendor_path == "":
+            return
+        log.info("apply egl vendor override")
+        target = read(self.egl_vendor_path)
+        target = target.replace('"ICD"', '"-ICD"')
+        write(self.egl_vendor_path, target)
 
-class Device(NamedTuple):
-    name: str
-    bus: str
-    bridge: str
-    bridge_bus: str
+    def revert_egl_override(self):
+        if self.egl_vendor_path == "":
+            return
+        log.info("revert egl vendor override")
+        target = read(self.egl_vendor_path)
+        target = target.replace('"-ICD"', '"ICD"')
+        write(self.egl_vendor_path, target)
 
 
-class Devices:
+class Pci:
+    """
+    PCI devices and processes manager.
+    """
+
+    class Device:
+        name: str
+        bus: str
+        bridge: str
+
+        def __repr__(self):
+            return f'{Config.__name__}({', '.join(f"{k}: {v}" for k, v in self.__dict__.items())})'
+
     def __init__(self, config: Config):
+        log.info(f"GPU init - config: {config}")
         self.config = config
 
-    def list_devices(self) -> list[Device]:
-        log.info(f"list devices")
-        lshw_cmd = """
-        lshw -json \
-            -disable cpuid -disable cpuinfo -disable device-tree -disable dmi -disable ide -disable isapnp \
-            -disable memory -disable network -disable pcmcia -disable scsi -disable spd -disable usb \
-        """
-        lshw = subprocess.run(lshw_cmd, shell=True, capture_output=True)
-        if lshw.returncode != 0:
-            log.warning(f"lshw error {lshw.returncode} stderr: {lshw.stderr}")
+    def pci_rescan(self):
+        log.info("pci rescan")
+        write("/sys/bus/pci/rescan", "1")
+
+    def pci_devices(self) -> list[Device]:
+        log.info("pci devices")
+        disable = "cpuid cpuinfo device-tree dmi ide isapnp memory network pcmcia scsi spd usb"
+        lshw_cmd = f"lshw -json {' '.join(f"-disable {d}" for d in disable.split(' '))}"
+        result = subprocess.run(lshw_cmd, shell=True, capture_output=True)
+        if result.returncode != 0:
+            log.warning(f"lshw error - code: {result.returncode}, stderr: {result.stderr}")
             return []
 
-        def find(parent: dict[str, Any] | None, child: dict[str, Any], matches: list[Device]):
+        def find(parent: dict[str, Any] | None, child: dict[str, Any], matches: list[Pci.Device]):
             if parent is not None and self.config.match_device(child):
-                matches.append(
-                    Device(
-                        name=f"{child['vendor']} - {child['product']}",
-                        bus=child["businfo"][4:],
-                        bridge=f"{parent['vendor']} - {parent['product']}",
-                        bridge_bus=parent["businfo"][4:],
-                    )
-                )
-            if "children" in child:
-                for grandchild in child["children"]:
-                    find(child, grandchild, matches)
+                device = Pci.Device()
+                matches.append(device)
+                device.name = f"{child['vendor']} - {child['product']}"
+                device.bus = child["businfo"][4:]
+                device.bridge = parent["businfo"][4:]
+            for grandchild in child.get("children", []):
+                find(child, grandchild, matches)
             return matches
 
-        devices = find(None, json.loads(lshw.stdout), [])
+        devices = find(None, json.loads(result.stdout), [])
         log.info(f"devices: {devices}")
         return devices
 
-    def pci_rescan(self):
-        log.info(f"pci rescan")
-        with open("/sys/bus/pci/rescan", "w") as f:
-            f.write("1")
-
     def turn_on(self):
-        log.info(f"turn on devices")
+        log.info(f"turn on")
         self.pci_rescan()
-        for device in self.list_devices():
-            log.info(f"setting power control {device.bridge} - {device.bridge_bus}")
-            with open(f"/sys/bus/pci/devices/{device.bridge_bus}/power/control", "w") as f:
-                f.write("on")
-            log.info(f"turning on device {device.name} - {device.bus}")
-            with open(f"/sys/bus/pci/devices/{device.bus}/power/control", "w") as f:
-                f.write("on")
+        for device in self.pci_devices():
+            log.info(f"turn on device {device.name} - {device.bus} - {device.bridge}")
+            write(f"/sys/bus/pci/devices/{device.bridge}/power/control", "on")
+            write(f"/sys/bus/pci/devices/{device.bus}/power/control", "on")
 
     def turn_off(self):
-        log.info(f"turn off devices")
-        for device in self.list_devices():
-            log.info(f"turning off device {device.name} - {device.bus}")
-            with open(f"/sys/bus/pci/devices/{device.bus}/remove", "w") as f:
-                f.write("1")
-            log.info(f"setting power control {device.bridge} - {device.bridge_bus}")
-            with open(f"/sys/bus/pci/devices/{device.bridge_bus}/power/control", "w") as f:
-                f.write("auto")
+        log.info(f"turn off")
+        for device in self.pci_devices():
+            log.info(f"turn off device {device.name} - {device.bus} - {device.bridge}")
+            write(f"/sys/bus/pci/devices/{device.bus}/remove", "1")
+            write(f"/sys/bus/pci/devices/{device.bridge}/power/control", "auto")
 
     def load_modules(self):
         log.info("load modules")
-        for module in self.config.unload_modules_sequence():
-            result = subprocess.run(["modprobe", module], capture_output=True)
-            if result.returncode == 0:
-                log.info(f"load module {module}")
-            else:
-                log.warning(f"load module {module}: {result.returncode} - {result.stderr.decode('utf-8').strip()}")
+        for module in self.config.unload_kernel_modules_sequence():
+            log.info(f"load module {module}")
+            result = subprocess.run(f"modprobe {module}", shell=True, capture_output=True)
+            level = result.returncode == 0 and logging.INFO or logging.WARNING
+            log.log(level, f"result: {result.returncode} {result.stderr}")
 
     def unload_modules(self):
         log.info("unload modules")
-        for module in self.config.unload_modules_sequence():
-            result = subprocess.run(["modprobe", "--remove", module], capture_output=True)
-            if result.returncode == 0:
-                log.info(f"unload module {module}")
-            else:
-                log.warning(f"unload module {module}: {result.returncode}\n{result.stdout}\n{result.stderr}")
+        for module in self.config.unload_kernel_modules_sequence():
+            log.info(f"unload module {module}")
+            result = subprocess.run(f"modprobe --remove {module}", capture_output=True)
+            level = result.returncode == 0 and logging.INFO or logging.WARNING
+            log.log(level, f"result: {result.returncode} {result.stderr}")
 
     def status(self):
-        status = len(self.list_devices()) > 0 and "on" or "off"
+        status = len(self.pci_devices()) > 0 and "on" or "off"
         log.info(f"status: {status}")
         return status
 
     def ps(self):
         lsof = subprocess.run("lsof /dev/nvidia*", shell=True, capture_output=True)
         usages = lsof.stdout.decode("utf-8").splitlines()[1:]
-        log.info(f"usages: {usages}")
         processes = {usage.split()[1]: usage.split()[0] for usage in usages}
-        log.info(f"processes: {processes}")
+        log.info(f"ps: {processes}")
         return processes
 
     def kill(self):
         processes = self.ps()
         for pid, name in processes.items():
-            log.info(f"killing process {name} - {pid}")
-            subprocess.run(["kill", pid])
+            log.info(f"kill process {name} - {pid}")
+            subprocess.run(f"kill {pid}", shell=True)
 
 
 class Daemon:
-    running_processes = 0
+    """
+    NVX daemon that listens to commands on a unix socket.
+    """
 
-    def __init__(self, config: Config, devices: Devices):
+    def __init__(self, config: Config, pci: Pci):
+        log.info(f"daemon init - config: {config} - pci: {pci}")
         self.config = config
-        self.devices = devices
+        self.pci = pci
+        self.started_processes = 0
+        self.pci_callables = [p for p in dir(self.pci) if not p.startswith("__") and callable(getattr(self.pci, p))]
 
     def start(self):
-        log.info("daemon init")
+        log.info("daemon start")
         try:
             os.remove(UNIX_SOCKET)
+        except FileNotFoundError:
+            pass
         except OSError as e:
-            log.error(f"could not remove socket {UNIX_SOCKET} - {e}")
+            log.error(f"could not remove {UNIX_SOCKET}")
+            raise e
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(UNIX_SOCKET)
         os.chmod(UNIX_SOCKET, 0o777)
         server.listen(1)
-        log.info(f"server started at socket {UNIX_SOCKET}")
+        log.info(f"server started at {UNIX_SOCKET}")
         while True:
             client, addr = server.accept()
             log.info(f"client connected {addr}")
-            result = self.handler(client.recv(1024).decode("utf-8"))
-            client.sendall(result.encode("utf-8"))
+            client.sendall(self.handle(client.recv(1024).decode("utf-8")).encode("utf-8"))
 
-    def handler(self, command: str):
-        log.info(f"daemon handler {command}")
+    def handle(self, command: str):
+        log.info(f"handle {command}")
+        if command.startswith("__") and command[2:] in self.pci_callables:
+            return str(getattr(self.pci, command[2:])())
         if command == "dev":
-            return str(self.devices.list_devices())
+            return str(self.pci.pci_devices())
         if command == "status":
-            return self.devices.status()
+            return self.pci.status()
         if command == "on":
-            if self.running_processes > 0:
+            if self.started_processes > 0:
                 return "busy"
-            self.devices.turn_on()
-            self.devices.load_modules()
-            return self.devices.status()
+            self.pci.turn_on()
+            self.pci.load_modules()
+            return self.pci.status()
         if command == "off":
-            if self.running_processes > 0:
+            if self.started_processes > 0:
                 return "busy"
-            self.devices.kill()
-            self.devices.unload_modules()
-            self.devices.turn_off()
-            return self.devices.status()
+            if self.config.kill_on_off:
+                self.pci.kill()
+            self.pci.unload_modules()
+            self.pci.turn_off()
+            return self.pci.status()
         if command == "ps":
-            return str(self.devices.ps())
+            return str(self.pci.ps())
         if command == "kill":
-            self.devices.kill()
-            self.running_processes = 0
-            return str(self.devices.ps())
+            self.pci.kill()
+            return str(self.pci.ps())
         if command == "start":
-            if self.running_processes == 0:
-                self.devices.turn_on()
-                self.devices.load_modules()
-            self.running_processes += 1
-            return self.devices.status()
+            self.handle("on")
+            self.started_processes += 1
+            return self.pci.status()
         if command == "end":
-            self.running_processes -= 1
-            if self.running_processes == 0:
-                self.devices.kill()
-                self.devices.unload_modules()
-                self.devices.turn_off()
-            return self.devices.status()
-        return "unknown command"
+            self.started_processes -= 1
+            self.handle("off")
+            return self.pci.status()
+        return "unknown"
 
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "daemon":
-        log.info(f"NVX {VERSION} config: {CONFIG_PATH} log: {LOGGER_PATH}")
-        config = Config()
-        devices = Devices(config)
-        daemon = Daemon(config, devices)
-        devices.turn_off()
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+        file_handler = logging.FileHandler(LOGGER_PATH)
+        file_handler.setFormatter(logging.Formatter("%(asctime)s: %(levelname)s %(message)s"))
+        log.addHandler(stream_handler)
+        log.addHandler(file_handler)
+        log.info(f"NVX {VERSION} - config: {CONFIG_PATH}, log: {LOGGER_PATH}, socket: {UNIX_SOCKET}")
+        config = Config(CONFIG_PATH)
+        pci = Pci(config)
+        daemon = Daemon(config, pci)
+        config.apply_egl_override()
+        pci.turn_off()
         daemon.start()
-    elif len(sys.argv) >= 2:
+        sys.exit(0)
+
+    if len(sys.argv) >= 2:
         action = sys.argv[1]
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             sock.connect(UNIX_SOCKET)
         except Exception as e:
-            print(f"could not connect to socket {UNIX_SOCKET} - {e}")
+            print(f"could not connect to {UNIX_SOCKET}")
             raise e
         sock.sendall(action.encode("utf-8"))
         result = sock.recv(1024).decode("utf-8")
         if action != "start":
             print(result)
-        else:
-            command = " ".join(sys.argv[3:])
-            env = os.environ.copy()
-            env["__NV_PRIME_RENDER_OFFLOAD"] = "1"
-            env["__VK_LAYER_NV_optimus"] = "NVIDIA_only"
-            env["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
-            process = subprocess.Popen(
-                command, shell=True, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, env=env
-            )
-            returncode = process.wait()
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            try:
-                sock.connect(UNIX_SOCKET)
-            except Exception as e:
-                print(f"could not connect to socket {UNIX_SOCKET} - {e}")
-                raise e
-            sock.sendall(b"end")
-            sock.recv(1024).decode("utf-8")
-            sys.exit(returncode)
-    else:
-        print(
-            """
+            sys.exit(0)
+
+        command = " ".join(sys.argv[2:])
+        env = os.environ.copy()
+        env["__NV_PRIME_RENDER_OFFLOAD"] = "1"
+        env["__VK_LAYER_NV_optimus"] = "NVIDIA_only"
+        env["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
+        process = subprocess.Popen(command, shell=True, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, env=env)
+        returncode = process.wait()
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.connect(UNIX_SOCKET)
+        except Exception as e:
+            print(f"could not connect to socket {UNIX_SOCKET}")
+        sock.sendall("end".encode("utf-8"))
+        sock.recv(1024).decode("utf-8")
+        sys.exit(returncode)
+
+    print(
+        """
 Usage: nvx [start|on|off|off-boot|off-kill|status|ps|psx|kill|dev]
 
 -- automatic gpu management:
@@ -306,5 +328,5 @@ Usage: nvx [start|on|off|off-boot|off-kill|status|ps|psx|kill|dev]
     dev
         Print the GPU related devices if the GPU is on.
 """
-        )
-        sys.exit(1)
+    )
+    sys.exit(1)
