@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 LOGGER_PATH = "/var/log/nvx.log"
 CONFIG_PATH = "/etc/nvx.conf"
 UNIX_SOCKET = "/tmp/nvx.sock"
@@ -238,13 +238,14 @@ class Daemon:
             return str(self.pci.ps())
         if command == "kill":
             self.pci.kill()
+            self.started_processes = 0
             return str(self.pci.ps())
         if command == "start":
             self.handle("on")
             self.started_processes += 1
             return self.pci.status()
         if command == "end":
-            self.started_processes -= 1
+            self.started_processes = max(self.started_processes - 1, 0)
             self.handle("off")
             return self.pci.status()
         return "unknown"
@@ -278,13 +279,16 @@ if __name__ == "__main__":
             print(result)
             sys.exit(0)
 
-        command = " ".join(sys.argv[2:])
+        cmd = " ".join(sys.argv[2:])
         env = os.environ.copy()
         env["__NV_PRIME_RENDER_OFFLOAD"] = "1"
         env["__VK_LAYER_NV_optimus"] = "NVIDIA_only"
         env["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
-        process = subprocess.Popen(command, shell=True, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, env=env)
-        returncode = process.wait()
+        try:
+            process = subprocess.Popen(cmd, shell=True, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, env=env)
+            returncode = process.wait()
+        except BaseException as e:
+            returncode = 1
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             sock.connect(UNIX_SOCKET)
