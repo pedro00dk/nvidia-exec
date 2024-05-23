@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 LOGGER_PATH = "/var/log/nvx.log"
 CONFIG_PATH = "/etc/nvx.conf"
 UNIX_SOCKET = "/tmp/nvx.sock"
@@ -158,7 +158,7 @@ class Pci:
         log.info("unload modules")
         for module in self.config.unload_kernel_modules_sequence():
             log.info(f"unload module {module}")
-            result = subprocess.run(f"modprobe --remove {module}", capture_output=True)
+            result = subprocess.run(f"modprobe --remove {module}", shell=True, capture_output=True)
             level = result.returncode == 0 and logging.INFO or logging.WARNING
             log.log(level, f"result: {result.returncode} {result.stderr}")
 
@@ -252,12 +252,9 @@ class Daemon:
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "daemon":
-        stream_handler = logging.StreamHandler(sys.stdout)
-        stream_handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
-        file_handler = logging.FileHandler(LOGGER_PATH)
-        file_handler.setFormatter(logging.Formatter("%(asctime)s: %(levelname)s %(message)s"))
-        log.addHandler(stream_handler)
-        log.addHandler(file_handler)
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+        log.addHandler(handler)
         log.info(f"NVX {VERSION} - config: {CONFIG_PATH}, log: {LOGGER_PATH}, socket: {UNIX_SOCKET}")
         config = Config(CONFIG_PATH)
         pci = Pci(config)
