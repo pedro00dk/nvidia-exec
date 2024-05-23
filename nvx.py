@@ -2,8 +2,7 @@
 
 from typing import Any
 import json
-import logging
-import logging.handlers
+import logging as log
 import os
 import re
 import socket
@@ -11,13 +10,18 @@ import subprocess
 import sys
 
 
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 LOGGER_PATH = "/var/log/nvx.log"
 CONFIG_PATH = "/etc/nvx.conf"
 UNIX_SOCKET = "/tmp/nvx.sock"
 
 
-log = logging.getLogger()
+log.basicConfig(
+    level=log.DEBUG,
+    encoding="utf-8",
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[log.FileHandler(LOGGER_PATH), log.StreamHandler()],
+)
 
 
 def read(path: str):
@@ -151,7 +155,7 @@ class Pci:
         for module in self.config.unload_kernel_modules_sequence():
             log.info(f"load module {module}")
             result = subprocess.run(f"modprobe {module}", shell=True, capture_output=True)
-            level = result.returncode == 0 and logging.INFO or logging.WARNING
+            level = result.returncode == 0 and log.INFO or log.WARNING
             log.log(level, f"result: {result.returncode} {result.stderr}")
 
     def unload_modules(self):
@@ -159,7 +163,7 @@ class Pci:
         for module in self.config.unload_kernel_modules_sequence():
             log.info(f"unload module {module}")
             result = subprocess.run(f"modprobe --remove {module}", shell=True, capture_output=True)
-            level = result.returncode == 0 and logging.INFO or logging.WARNING
+            level = result.returncode == 0 and log.INFO or log.WARNING
             log.log(level, f"result: {result.returncode} {result.stderr}")
 
     def status(self):
@@ -253,9 +257,6 @@ class Daemon:
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "daemon":
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
-        log.addHandler(handler)
         log.info(f"NVX {VERSION} - config: {CONFIG_PATH}, log: {LOGGER_PATH}, socket: {UNIX_SOCKET}")
         config = Config(CONFIG_PATH)
         pci = Pci(config)
@@ -300,7 +301,7 @@ if __name__ == "__main__":
 
     print(
         """
-Usage: nvx [start|on|off|off-boot|off-kill|status|ps|psx|kill|dev]
+Usage: nvx [start|on|off|status|ps|kill|dev]
 
 -- automatic gpu management:
     start [command]
