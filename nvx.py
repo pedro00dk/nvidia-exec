@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 
-VERSION = "0.2.6"
+VERSION = "0.2.7"
 LOGGER_PATH = "/var/log/nvx.log"
 CONFIG_PATH = "/etc/nvx.conf"
 UNIX_SOCKET = "/tmp/nvx.sock"
@@ -20,7 +20,7 @@ log.basicConfig(
     level=log.DEBUG,
     encoding="utf-8",
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[log.FileHandler(LOGGER_PATH), log.StreamHandler()],
+    handlers=[log.StreamHandler(), log.FileHandler(LOGGER_PATH, delay=True)],
 )
 
 
