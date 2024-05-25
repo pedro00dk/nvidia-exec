@@ -10,7 +10,6 @@ import subprocess
 import sys
 
 
-VERSION = "0.2.7"
 LOGGER_PATH = "/var/log/nvx.log"
 CONFIG_PATH = "/etc/nvx.conf"
 UNIX_SOCKET = "/tmp/nvx.sock"
@@ -57,6 +56,7 @@ class Config:
         self.device_classes = [v.strip() for v in config.get("device_classes", "").split(",")]
         self.device_vendors = [v.strip() for v in config.get("device_vendors", "").split(",")]
         self.egl_vendor_path = config.get("egl_vendor_path", "").strip()
+        self.egl_vendor_apply = config.get("egl_vendor_apply", "") == "true"
         self.kill_on_off = config.get("kill_on_off", "") == "true"
 
     def __repr__(self):
@@ -73,20 +73,15 @@ class Config:
         vendor: str = device.get("vendor", "").lower()
         return class_ in self.device_classes and any(v in vendor for v in self.device_vendors)
 
-    def apply_egl_override(self):
+    def apply_egl_changes(self):
         if self.egl_vendor_path == "":
             return
         log.info("apply egl vendor override")
         target = read(self.egl_vendor_path)
-        target = target.replace('"ICD"', '"-ICD"')
-        write(self.egl_vendor_path, target)
-
-    def revert_egl_override(self):
-        if self.egl_vendor_path == "":
-            return
-        log.info("revert egl vendor override")
-        target = read(self.egl_vendor_path)
-        target = target.replace('"-ICD"', '"ICD"')
+        if self.egl_vendor_apply:
+            target = target.replace('"ICD"', '"-ICD"')
+        else:
+            target = target.replace('"-ICD"', '"ICD"')
         write(self.egl_vendor_path, target)
 
 
@@ -257,11 +252,11 @@ class Daemon:
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "daemon":
-        log.info(f"NVX {VERSION} - config: {CONFIG_PATH}, log: {LOGGER_PATH}, socket: {UNIX_SOCKET}")
+        log.info(f"NVX - config: {CONFIG_PATH}, log: {LOGGER_PATH}, socket: {UNIX_SOCKET}")
         config = Config(CONFIG_PATH)
         pci = Pci(config)
         daemon = Daemon(config, pci)
-        config.apply_egl_override()
+        config.apply_egl_changes()
         pci.turn_off()
         daemon.start()
         sys.exit(0)
