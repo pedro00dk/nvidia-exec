@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 from typing import Any
+import glob
 import json
 import logging as log
 import os
@@ -109,8 +110,8 @@ class Pci:
     def pci_devices(self) -> list[Device]:
         log.info("pci devices")
         disable = "cpuid cpuinfo device-tree dmi ide isapnp memory network pcmcia scsi spd usb"
-        lshw_cmd = f"lshw -json {' '.join(f"-disable {d}" for d in disable.split(' '))}"
-        result = subprocess.run(lshw_cmd, shell=True, capture_output=True)
+        lshw_cmd = ["lshw", "-json", *(param for option in disable.split() for param in ("-disable", option))]
+        result = subprocess.run(lshw_cmd, capture_output=True)
         if result.returncode != 0:
             log.warning(f"lshw error - code: {result.returncode}, stderr: {result.stderr}")
             return []
@@ -149,7 +150,7 @@ class Pci:
         log.info("load modules")
         for module in self.config.unload_kernel_modules_sequence():
             log.info(f"load module {module}")
-            result = subprocess.run(f"modprobe {module}", shell=True, capture_output=True)
+            result = subprocess.run(["modprobe", *module.split()], capture_output=True)
             level = result.returncode == 0 and log.INFO or log.WARNING
             log.log(level, f"result: {result.returncode} {result.stderr}")
 
@@ -157,7 +158,7 @@ class Pci:
         log.info("unload modules")
         for module in self.config.unload_kernel_modules_sequence():
             log.info(f"unload module {module}")
-            result = subprocess.run(f"modprobe --remove {module}", shell=True, capture_output=True)
+            result = subprocess.run(["modprobe", "--remove", *module.split()], capture_output=True)
             level = result.returncode == 0 and log.INFO or log.WARNING
             log.log(level, f"result: {result.returncode} {result.stderr}")
 
@@ -167,7 +168,7 @@ class Pci:
         return status
 
     def ps(self):
-        lsof = subprocess.run("lsof /dev/nvidia*", shell=True, capture_output=True)
+        lsof = subprocess.run(["lsof", *glob.glob("/dev/nvidia*")], capture_output=True)
         usages = lsof.stdout.decode("utf-8").splitlines()[1:]
         processes = {usage.split()[1]: usage.split()[0] for usage in usages}
         log.info(f"ps: {processes}")
@@ -177,7 +178,7 @@ class Pci:
         processes = self.ps()
         for pid, name in processes.items():
             log.info(f"kill process {name} - {pid}")
-            subprocess.run(f"kill {pid}", shell=True)
+            subprocess.run(["kill", str(pid)])
 
 
 class Daemon:
@@ -259,7 +260,7 @@ if __name__ == "__main__":
         config.apply_egl_changes()
         pci.turn_off()
         daemon.start()
-        sys.exit(0)
+        sys.exit()
 
     if len(sys.argv) >= 2:
         action = sys.argv[1]
@@ -273,18 +274,15 @@ if __name__ == "__main__":
         result = sock.recv(1024).decode("utf-8")
         if action != "start":
             print(result)
-            sys.exit(0)
+            sys.exit()
 
-        cmd = " ".join(sys.argv[2:])
+        cmd = ["bash", "-c", *sys.argv[2:]]
+        cmd2 = " ".join(sys.argv[2:])
         env = os.environ.copy()
         env["__NV_PRIME_RENDER_OFFLOAD"] = "1"
         env["__VK_LAYER_NV_optimus"] = "NVIDIA_only"
         env["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
-        try:
-            process = subprocess.Popen(cmd, shell=True, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, env=env)
-            returncode = process.wait()
-        except BaseException as e:
-            returncode = 1
+        process = subprocess.run(sys.argv[2:], env=env)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             sock.connect(UNIX_SOCKET)
@@ -292,7 +290,7 @@ if __name__ == "__main__":
             print(f"could not connect to socket {UNIX_SOCKET}")
         sock.sendall("end".encode("utf-8"))
         sock.recv(1024).decode("utf-8")
-        sys.exit(returncode)
+        sys.exit(process.returncode)
 
     print(
         """
