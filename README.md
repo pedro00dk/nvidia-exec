@@ -4,28 +4,6 @@
 
 Note: `nvx` is experimental and require recent versions of nvidia drivers, gnome, and mesa patches to work.
 
-## Usage
-
-Run `nvx start [program]`.
-
-`nvx start` can be called multiple times, its is only going to initialize the devices in the first call and clean resources when the last call ends.
-
-## All actions
-
-`nvx [start|on|off|status|ps|kill|dev]`
-
-### Automatic GPU management
-
--   `start [command]`: Turn on the gpu, load modules if necessary, and run [command]. When [command] exits, the gpu is turned off if there are no other 'nvx start' processes. During turn off, processes using the gpu not started with 'nvx start' are killed.
-
-### Manual GPU management
-
--   `off`: Attempt to kill processes using the GPU, unload modules and turn off the gpu. If npx start is running, it is no-op.
--   `status`: Print the GPU status.
--   `ps`: Print the processes using the GPU.
--   `kill`: Attempt to kill processes using the GPU reported by nvx ps.
--   `dev`: Print the GPU related devices if the GPU is on.
-
 ## Installation
 
 This package is currently only available for Arch Linux on the _Arch User Repository_.
@@ -49,21 +27,38 @@ The `nvx.service` should also be enabled, it prevents nvidia modules from loadin
 $ sudo systemctl enable nvx
 ```
 
-### Files and Dependencies
+### Other distributions
 
-For other users that may want to create a package to their preferred systems, the following is where I place the files on Arch Linux.
+For users that may want to create a package for their preferred distributions, the following is where files are usually placed.
 
 -   **nvx** -> _/usr/bin/nvx_ - Script that handles the gpu and run programs.
 -   **nvx.service** -> _/usr/lib/systemd/system/nvx.service_ - Service that turns off gpu during boot.
 -   **nvx-modprobe.conf** -> /usr/lib/modprobe.d/nvx.conf - Blacklisted modules.
 -   **nvx-options.conf** -> /etc/nvx.conf - Tune nvx options.
 
-Required dependencies:
+The following dependencies are required:
 
 -   **python**
 -   **lshw** - https://linux.die.net/man/1/lshw
 -   **lsof** - https://linux.die.net/man/8/lsof
 -   **Nvidia proprietary drivers**
+
+## Usage
+
+Run `nvx start [program]`.
+
+-   `start [command]`: Turn on the gpu, load modules if necessary, and run [command]. When [command] exits, the gpu is turned off if there are no other 'nvx start' processes. During turn off, processes using the gpu not started with 'nvx start' are killed.
+
+-   `off`: Attempt to kill processes using the GPU, unload modules and turn off the gpu. If npx start is running, it is no-op.
+-   `status`: Print the GPU status.
+-   `ps`: Print the processes using the GPU.
+-   `kill`: Attempt to kill processes using the GPU reported by nvx ps.
+-   `dev`: Print the GPU related devices if the GPU is on.
+
+### Examples
+
+-   `nvx start bash`: Starts a new shell, and commands ran on it will run the GPU.
+-   `nvx start %command%`: Turns on the GPU before starting a steam game.
 
 ## Troubleshooting
 
