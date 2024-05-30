@@ -276,13 +276,11 @@ if __name__ == "__main__":
             print(result)
             sys.exit()
 
-        cmd = ["bash", "-c", *sys.argv[2:]]
-        cmd2 = " ".join(sys.argv[2:])
         env = os.environ.copy()
         env["__NV_PRIME_RENDER_OFFLOAD"] = "1"
         env["__VK_LAYER_NV_optimus"] = "NVIDIA_only"
         env["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
-        process = subprocess.run(sys.argv[2:], env=env)
+        process = subprocess.run(" ".join(sys.argv[2:]), shell=True, env=env)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             sock.connect(UNIX_SOCKET)
