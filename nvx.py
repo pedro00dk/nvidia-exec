@@ -1,7 +1,6 @@
 #!/usr/bin/python
 
 from typing import Any
-import glob
 import json
 import logging as log
 import os
@@ -50,9 +49,9 @@ class Config:
     """
 
     def __init__(self, path: str):
-        log.info(f"Config init - path: {path}")
+        log.info(f"config init - path: {path}")
         lines = [line.strip() for line in read(path).splitlines() if len(line) > 0 and not re.match(r"^\s*#|^$", line)]
-        config: dict[str, str] = {line.split("=")[0]: line.split("=")[1].strip() for line in lines}
+        config: dict[str, str] = {line[:line.index('=')]: line[line.index('=') + 1:].strip() for line in lines}
         self.kernel_modules = [v.strip() for v in config.get("kernel_modules", "").split(",")]
         self.device_classes = [v.strip() for v in config.get("device_classes", "").split(",")]
         self.device_vendors = [v.strip() for v in config.get("device_vendors", "").split(",")]
@@ -100,7 +99,7 @@ class Pci:
             return f'{Config.__name__}({', '.join(f"{k}: {v}" for k, v in self.__dict__.items())})'
 
     def __init__(self, config: Config):
-        log.info(f"GPU init - config: {config}")
+        log.info("pci init")
         self.config = config
 
     def pci_rescan(self):
@@ -109,9 +108,13 @@ class Pci:
 
     def pci_devices(self) -> list[Device]:
         log.info("pci devices")
-        disable = "cpuid cpuinfo device-tree dmi ide isapnp memory network pcmcia scsi spd usb"
-        lshw_cmd = ["lshw", "-json", *(param for option in disable.split() for param in ("-disable", option))]
-        result = subprocess.run(lshw_cmd, capture_output=True)
+        lshw_cmd = """
+            lshw \
+                -disable cpuid -disable cpuinfo -disable device-tree -disable dmi -disable isapnp -disable memory \
+                -disable network -disable pcmcia -disable scsi -disable spd -disable usb \
+                -json
+        """
+        result = subprocess.run(lshw_cmd, shell=True, capture_output=True)
         if result.returncode != 0:
             log.warning(f"lshw error - code: {result.returncode}, stderr: {result.stderr}")
             return []
@@ -150,7 +153,7 @@ class Pci:
         log.info("load modules")
         for module in self.config.unload_kernel_modules_sequence():
             log.info(f"load module {module}")
-            result = subprocess.run(["modprobe", *module.split()], capture_output=True)
+            result = subprocess.run(f"modprobe {module}", shell=True, capture_output=True)
             level = result.returncode == 0 and log.INFO or log.WARNING
             log.log(level, f"result: {result.returncode} {result.stderr}")
 
@@ -158,7 +161,7 @@ class Pci:
         log.info("unload modules")
         for module in self.config.unload_kernel_modules_sequence():
             log.info(f"unload module {module}")
-            result = subprocess.run(["modprobe", "--remove", *module.split()], capture_output=True)
+            result = subprocess.run(f"modprobe --remove {module}", shell=True, capture_output=True)
             level = result.returncode == 0 and log.INFO or log.WARNING
             log.log(level, f"result: {result.returncode} {result.stderr}")
 
@@ -168,7 +171,7 @@ class Pci:
         return status
 
     def ps(self):
-        lsof = subprocess.run(["lsof", *glob.glob("/dev/nvidia*")], capture_output=True)
+        lsof = subprocess.run(f"lsof /dev/nvidia*", shell=True, capture_output=True)
         usages = lsof.stdout.decode("utf-8").splitlines()[1:]
         processes = {usage.split()[1]: usage.split()[0] for usage in usages}
         log.info(f"ps: {processes}")
@@ -178,7 +181,7 @@ class Pci:
         processes = self.ps()
         for pid, name in processes.items():
             log.info(f"kill process {name} - {pid}")
-            subprocess.run(["kill", str(pid)])
+            subprocess.run(f"kill {pid}", shell=True)
 
 
 class Daemon:
@@ -187,7 +190,7 @@ class Daemon:
     """
 
     def __init__(self, config: Config, pci: Pci):
-        log.info(f"daemon init - config: {config} - pci: {pci}")
+        log.info("daemon init")
         self.config = config
         self.pci = pci
         self.started_processes = 0
@@ -257,6 +260,7 @@ if __name__ == "__main__":
         config = Config(CONFIG_PATH)
         pci = Pci(config)
         daemon = Daemon(config, pci)
+        log.info(f"NVX - config: {config}, pci: {pci}, daemon: {daemon}")
         config.apply_egl_changes()
         pci.turn_off()
         daemon.start()
@@ -281,6 +285,7 @@ if __name__ == "__main__":
         env["__VK_LAYER_NV_optimus"] = "NVIDIA_only"
         env["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
         process = subprocess.run(" ".join(sys.argv[2:]), shell=True, env=env)
+
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             sock.connect(UNIX_SOCKET)
