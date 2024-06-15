@@ -59,6 +59,7 @@ Run `nvx start [program]`.
 
 -   `nvx start bash`: Starts a new shell, and commands ran on it will run the GPU.
 -   `nvx start %command%`: Turns on the GPU before starting a steam game.
+    -   Some games don't work when started like this, starting steam with the GPU should work: `nvx start steam`
 
 ## Troubleshooting
 
