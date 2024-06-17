@@ -2,7 +2,7 @@
 Description="Start daemon and turn off gpu during boot."
 
 [Service]
-Type=oneshot
+Type=simple
 ExecStart=/usr/bin/nvx daemon
 
 [Install]
