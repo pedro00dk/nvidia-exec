@@ -60,7 +60,7 @@ class Config:
         self.kill_on_off = config.get("kill_on_off", "") == "true"
 
     def __repr__(self):
-        return f'{Config.__name__}({', '.join(f"{k}: {v}" for k, v in self.__dict__.items())})'
+        return f'{Config.__name__}({", ".join(f"{k}: {v}" for k, v in self.__dict__.items())})'
 
     def load_kernel_modules_sequence(self):
         return [module for module in self.kernel_modules if module != "nouveau"]
@@ -96,7 +96,7 @@ class Pci:
         bridge: str
 
         def __repr__(self):
-            return f'{Config.__name__}({', '.join(f"{k}: {v}" for k, v in self.__dict__.items())})'
+            return f'{Config.__name__}({", ".join(f"{k}: {v}" for k, v in self.__dict__.items())})'
 
     def __init__(self, config: Config):
         log.info("pci init")
