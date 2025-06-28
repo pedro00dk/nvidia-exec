@@ -151,7 +151,7 @@ class Pci:
 
     def load_modules(self):
         log.info("load modules")
-        for module in self.config.unload_kernel_modules_sequence():
+        for module in self.config.load_kernel_modules_sequence():
             log.info(f"load module {module}")
             result = subprocess.run(f"modprobe {module}", shell=True, capture_output=True)
             level = result.returncode == 0 and log.INFO or log.WARNING
