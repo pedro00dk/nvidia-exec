@@ -8,6 +8,7 @@ import re
 import socket
 import subprocess
 import sys
+import time
 
 
 LOGGER_PATH = "/var/log/nvx.log"
@@ -161,7 +162,10 @@ class Pci:
         log.info("unload modules")
         for module in self.config.unload_kernel_modules_sequence():
             log.info(f"unload module {module}")
-            result = subprocess.run(f"modprobe --remove {module}", shell=True, capture_output=True)
+            result = subprocess.run(f"modprobe --remove --remove-holders {module}", shell=True, capture_output=True)
+            if result.returncode == 1:
+                time.sleep(2)
+                result = subprocess.run(f"modprobe --remove --remove-holders {module}", shell=True, capture_output=True)
             level = result.returncode == 0 and log.INFO or log.WARNING
             log.log(level, f"result: {result.returncode} {result.stderr}")
 
