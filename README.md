@@ -93,3 +93,11 @@ You can check process using the GPU with the `nvx ps` command and attempt to kil
 #### Hangs with no apparent cause:
 
 If the `nvx start` command hangs during GPU turn off and there are no other processes using the GPU, that might be caused by a `modeset=1` option set to the `nvidia-drm` kernel module. That option might be set in a file like `/etc/modprobe.d/nvidia.conf`, via GRUB or any other means to set kernel module parameters. By removing the `nvidia-drm modeset=1` parameter, the `nvx start` should stop hanging. `modeset=1` is also a default option on `/etc/nvx.conf` so it should also be removed in the configuration file.
+
+### `nvx off` answers `busy: gpu driver still in use`:
+
+`nvx off` unloads the nvidia kernel modules before removing the GPU from the PCI bus. If they can't be unloaded because a process still has the GPU open, the GPU is left on and `nvx off` answers `busy`, listing the processes reported by `nvx ps`. The same message is logged as an error in `/var/log/nvx.log`. Applications that probe the GPU when they start while it is on, such as browsers and Electron apps, may keep `/dev/nvidiactl` open.
+
+Close those applications, or use `nvx kill`, then run `nvx off` again. The daemon also skips turning off the GPU at startup if its driver is still loaded.
+
+Earlier versions removed the GPU anyway. The nvidia driver then waits in the kernel for its last user to go away, leaving the daemon stuck and unkillable until that process exits or the system reboots.

@@ -143,12 +143,32 @@ class Pci:
             write(f"/sys/bus/pci/devices/{device.bridge}/power/control", "on")
             write(f"/sys/bus/pci/devices/{device.bus}/power/control", "on")
 
+    def bound_driver(self, device: Device):
+        """
+        Name of the kernel driver bound to the device, or None.
+        """
+        driver = f"/sys/bus/pci/devices/{device.bus}/driver"
+        return os.path.basename(os.readlink(driver)) if os.path.islink(driver) else None
+
     def turn_off(self):
+        """
+        Remove the gpu from the pci bus. Returns False if a device was left on because its driver is still bound.
+
+        Removing a device while its driver is in use makes the nvidia driver wait in the kernel until the last user
+        goes away, which leaves the daemon stuck and unkillable. So devices with a bound driver are skipped.
+        """
         log.info(f"turn off")
+        turned_off = True
         for device in self.pci_devices():
+            driver = self.bound_driver(device)
+            if driver is not None:
+                log.error(f"device {device.name} - {device.bus} left on, driver {driver} still bound - ps: {self.ps()}")
+                turned_off = False
+                continue
             log.info(f"turn off device {device.name} - {device.bus} - {device.bridge}")
             write(f"/sys/bus/pci/devices/{device.bus}/remove", "1")
             write(f"/sys/bus/pci/devices/{device.bridge}/power/control", "auto")
+        return turned_off
 
     def load_modules(self):
         log.info("load modules")
@@ -239,7 +259,8 @@ class Daemon:
             if self.config.kill_on_off:
                 self.pci.kill()
             self.pci.unload_modules()
-            self.pci.turn_off()
+            if not self.pci.turn_off():
+                return f"busy: gpu driver still in use, gpu left on - ps: {self.pci.ps()}"
             return self.pci.status()
         if command == "ps":
             return str(self.pci.ps())
