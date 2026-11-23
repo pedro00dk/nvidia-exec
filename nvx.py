@@ -14,6 +14,7 @@ import time
 LOGGER_PATH = "/var/log/nvx.log"
 CONFIG_PATH = "/etc/nvx.conf"
 UNIX_SOCKET = "/tmp/nvx.sock"
+BRIDGES_PATH = "/run/nvx-bridges"
 
 
 log.basicConfig(
@@ -135,8 +136,55 @@ class Pci:
         log.info(f"devices: {devices}")
         return devices
 
+    def removed_bridges(self) -> list[str]:
+        """
+        Bridges of the devices removed by turn_off since boot. They are kept in BRIDGES_PATH so they survive a
+        daemon restart, and are cleared on reboot, which also resets the links.
+        """
+        try:
+            with open(BRIDGES_PATH, "r") as file:
+                return sorted(set(file.read().split()))
+        except FileNotFoundError:
+            return []
+
+    def remember_bridge(self, bridge: str):
+        bridges = set(self.removed_bridges()) | {bridge}
+        write(BRIDGES_PATH, "".join(f"{b}\n" for b in sorted(bridges)))
+
+    def enable_link(self, bridge: str):
+        """
+        Clear the Link Disable bit in the PCI Express Link Control register of a bridge.
+
+        Some kernels (seen on 7.2.6 to 7.3.5) leave it set on the root port after the device behind it is removed, at
+        least for the removal at boot. With the link down, the rescan can't find the gpu any more, and since the gpu
+        is removed at every boot, a reboot doesn't bring it back.
+        """
+        try:
+            with open(f"/sys/bus/pci/devices/{bridge}/config", "r+b", buffering=0) as file:
+                config = file.read(256)
+                # walk the capability list (if the status register says there is one) to the pci express capability
+                offset = config[0x34] & 0xFC if config[0x06] & 0x10 else 0
+                for _ in range(48):
+                    if offset < 0x40 or offset + 0x12 > len(config):
+                        break
+                    if config[offset] == 0x10:
+                        link_control = int.from_bytes(config[offset + 0x10 : offset + 0x12], "little")
+                        if link_control & 0x10:
+                            log.info(f"clear link disable on bridge {bridge}")
+                            file.seek(offset + 0x10)
+                            file.write((link_control & ~0x10).to_bytes(2, "little"))
+                            time.sleep(1)  # let the link train before rescanning
+                        return
+                    offset = config[offset + 1] & 0xFC
+        except OSError as e:
+            log.warning(f"could not enable link on bridge {bridge}: {e}")
+
     def turn_on(self):
         log.info(f"turn on")
+        for bridge in self.removed_bridges():
+            if os.path.exists(f"/sys/bus/pci/devices/{bridge}"):
+                write(f"/sys/bus/pci/devices/{bridge}/power/control", "on")
+                self.enable_link(bridge)
         self.pci_rescan()
         for device in self.pci_devices():
             log.info(f"turn on device {device.name} - {device.bus} - {device.bridge}")
@@ -147,6 +195,7 @@ class Pci:
         log.info(f"turn off")
         for device in self.pci_devices():
             log.info(f"turn off device {device.name} - {device.bus} - {device.bridge}")
+            self.remember_bridge(device.bridge)
             write(f"/sys/bus/pci/devices/{device.bus}/remove", "1")
             write(f"/sys/bus/pci/devices/{device.bridge}/power/control", "auto")
 
