@@ -1,0 +1,11 @@
+[Unit]
+Description="Turn off the gpu again after resume if it was off before the sleep."
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nvx resume
+TimeoutStartSec=30
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target

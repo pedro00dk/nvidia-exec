@@ -198,6 +198,8 @@ class Daemon:
         self.config = config
         self.pci = pci
         self.started_processes = 0
+        # the state last asked for with on/off (or start/end), the gpu is turned off when the daemon starts
+        self.wanted = "off"
         self.pci_callables = [p for p in dir(self.pci) if not p.startswith("__") and callable(getattr(self.pci, p))]
 
     def start(self):
@@ -230,17 +232,21 @@ class Daemon:
         if command == "on":
             if self.started_processes > 0:
                 return "busy"
+            self.wanted = "on"
             self.pci.turn_on()
             self.pci.load_modules()
             return self.pci.status()
         if command == "off":
             if self.started_processes > 0:
                 return "busy"
+            self.wanted = "off"
             if self.config.kill_on_off:
                 self.pci.kill()
             self.pci.unload_modules()
             self.pci.turn_off()
             return self.pci.status()
+        if command == "resume":
+            return self.resume()
         if command == "ps":
             return str(self.pci.ps())
         if command == "kill":
@@ -256,6 +262,31 @@ class Daemon:
             self.handle("off")
             return self.pci.status()
         return "unknown"
+
+    def resume(self):
+        """
+        Called by nvx-resume.service after the system wakes up from suspend or hibernation.
+
+        On resume the kernel finds a removed gpu again and puts it back on the bus, so a gpu that was off before the
+        sleep is on afterwards (and anything can load the nvidia modules for it). Remove it again if off is the state
+        last asked for. Processes are not killed here: if a driver is still bound after unloading the modules, the gpu
+        is left on, as removing a device in use hangs.
+        """
+        if self.wanted != "off" or self.started_processes > 0:
+            log.info(f"resume: gpu wanted {self.wanted}, nothing to do")
+            return self.pci.status()
+        devices = self.pci.pci_devices()
+        if len(devices) == 0:
+            log.info("resume: gpu still off")
+            return "off"
+        log.info("resume: gpu came back on, turn it off again")
+        self.pci.unload_modules()
+        bound = [d.bus for d in devices if os.path.exists(f"/sys/bus/pci/devices/{d.bus}/driver")]
+        if len(bound) > 0:
+            log.warning(f"resume: driver still bound to {bound}, gpu left on")
+            return self.pci.status()
+        self.pci.turn_off()
+        return self.pci.status()
 
 
 if __name__ == "__main__":
@@ -301,7 +332,7 @@ if __name__ == "__main__":
 
     print(
         """
-Usage: nvx [start|on|off|status|ps|kill|dev]
+Usage: nvx [start|on|off|status|ps|kill|dev|resume]
 
 -- automatic gpu management:
     start [command]
@@ -329,6 +360,10 @@ Usage: nvx [start|on|off|status|ps|kill|dev]
 
     dev
         Print the GPU related devices if the GPU is on.
+
+    resume
+        Turn the gpu off again if it came back on during a suspend while it was off.
+        Run by nvx-resume.service after the system wakes up.
 """
     )
     sys.exit(1)

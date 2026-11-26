@@ -7,3 +7,4 @@ ExecStart=/usr/bin/nvx daemon
 
 [Install]
 WantedBy=multi-user.target
+Also=nvx-resume.service
