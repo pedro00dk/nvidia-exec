@@ -14,6 +14,7 @@ package() {
     cd "${pkgname}-${pkgver}"
     install -Dm 755 nvx.py "${pkgdir}/usr/bin/nvx"
     install -Dm 644 nvx.service "${pkgdir}/usr/lib/systemd/system/nvx.service"
+    install -Dm 644 nvx-resume.service "${pkgdir}/usr/lib/systemd/system/nvx-resume.service"
     install -Dm 644 nvx-modprobe.conf "${pkgdir}/usr/lib/modprobe.d/nvx.conf"
     install -Dm 666 nvx-options.conf "${pkgdir}/etc/nvx.conf"
 }

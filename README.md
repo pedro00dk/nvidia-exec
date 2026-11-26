@@ -27,12 +27,15 @@ The `nvx.service` should also be enabled, it prevents nvidia modules from loadin
 $ sudo systemctl enable nvx
 ```
 
+Enabling `nvx.service` also enables `nvx-resume.service`. The kernel finds the GPU again when the system wakes up from suspend or hibernation, so without it a GPU that was off before the sleep is on afterwards. The service turns it off again. If `nvx.service` was enabled before this service existed, enable it again (`sudo systemctl reenable nvx`) or enable `nvx-resume` directly.
+
 ### Other distributions
 
 For users that may want to create a package for their preferred distributions, the following is where files are usually placed.
 
 -   **nvx** -> _/usr/bin/nvx_ - Script that handles the gpu and run programs.
 -   **nvx.service** -> _/usr/lib/systemd/system/nvx.service_ - Service that turns off gpu during boot.
+-   **nvx-resume.service** -> _/usr/lib/systemd/system/nvx-resume.service_ - Service that turns the gpu off again after resume if it was off before.
 -   **nvx-modprobe.conf** -> /usr/lib/modprobe.d/nvx.conf - Blacklisted modules.
 -   **nvx-options.conf** -> /etc/nvx.conf - Tune nvx options.
 
