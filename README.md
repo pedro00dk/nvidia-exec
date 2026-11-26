@@ -63,6 +63,16 @@ Run `nvx start [program]`.
 
 ## Troubleshooting
 
+### `nvx on` doesn't find the GPU (kernels 7.2.6 and later):
+
+Some kernels (seen on 7.2.6 to 7.3.5) leave the PCIe link of the GPU's root port disabled after the GPU is removed, so the rescan in `nvx on` doesn't find it. It shows up at least after the removal `nvx.service` does at boot, so it leaves the GPU unusable through nvx. The daemon remembers the root port of each GPU it removes (in `/run/nvx-bridges`) and clears its Link Disable bit before rescanning; `clear link disable on bridge ...` in `/var/log/nvx.log` shows when that happened.
+
+To check a port by hand (`00:1c.4` here; `nvx dev` shows the GPU's bridge while it is on), look for `LnkDisable+`:
+
+```
+sudo lspci -vvv -s 00:1c.4 | grep LnkCtl:
+```
+
 ### GPU is still turned on after system boot:
 
 The `nvx.service` tries to turn off the GPU during the boot process. If there are other services trying to use the GPU at the same time, `nvx.service` is likely to hang and fail.
